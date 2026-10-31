@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HyperX Battery</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f4f2;
+    --surface: #fcfcfb;
+    --border: #e4e3df;
+    --grid: #ecebe7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #8a8984;
+    --charging: #2a78d6;
+    --discharging: #eb6834;
+    --usage: #1baf7a;
+    --critical: #d03b3b;
+    --good: #0ca30c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #111110;
+      --surface: #1a1a19;
+      --border: #2c2c2a;
+      --grid: #262624;
+      --text-primary: #f0efec;
+      --text-secondary: #c3c2b7;
+      --text-muted: #8a8984;
+      --charging: #3987e5;
+      --discharging: #d95926;
+      --usage: #199e70;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #111110; --surface: #1a1a19; --border: #2c2c2a; --grid: #262624;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8a8984;
+    --charging: #3987e5; --discharging: #d95926; --usage: #199e70;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text-primary);
+    font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  main { max-width: 1080px; margin: 0 auto; padding: 28px 16px 48px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0; }
+  .updated { color: var(--text-muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+  .dot.stale { background: var(--critical); }
+  .updated span { font-variant-numeric: tabular-nums; }
+  .next { width: 60px; height: 4px; border-radius: 2px; background: var(--grid); overflow: hidden; }
+  .next > div { height: 100%; width: 0; background: var(--text-muted); border-radius: 2px; }
+  .check {
+    border: 1px solid var(--border); background: var(--surface); color: var(--text-primary);
+    font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 6px; cursor: pointer; margin-left: 4px;
+  }
+  .check:hover:not(:disabled) { background: var(--grid); }
+  .check:disabled { color: var(--text-muted); cursor: default; }
+
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
+  .top { display: grid; grid-template-columns: minmax(240px, 1.1fr) 2fr; gap: 12px; margin-bottom: 12px; }
+  @media (max-width: 760px) { .top { grid-template-columns: 1fr; } }
+
+  .hero .label { color: var(--text-secondary); font-size: 13px; }
+  .hero .big { font-size: 56px; font-weight: 600; line-height: 1.05; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
+  .hero .state { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; margin-top: 4px; }
+  .hero .state i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .hero .sub { color: var(--text-secondary); margin-top: 8px; font-variant-numeric: tabular-nums; }
+  .bar { height: 8px; border-radius: 4px; background: var(--grid); margin-top: 14px; overflow: hidden; }
+  .bar > div { height: 100%; border-radius: 4px; background: var(--text-secondary); }
+
+  .tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .tile .k { color: var(--text-secondary); font-size: 13px; }
+  .tile .v { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .s { color: var(--text-muted); font-size: 12px; }
+
+  .chart-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+  .chart-head h2, .sessions h2, .health h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  .legend { display: flex; gap: 14px; color: var(--text-secondary); font-size: 13px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  .ranges { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .ranges button {
+    border: 0; background: transparent; color: var(--text-secondary); font: inherit; font-size: 13px;
+    padding: 5px 12px; cursor: pointer;
+  }
+  .ranges button + button { border-left: 1px solid var(--border); }
+  .ranges button[aria-pressed="true"] { background: var(--grid); color: var(--text-primary); font-weight: 600; }
+
+  .chart-wrap { position: relative; }
+  svg { display: block; width: 100%; height: 300px; }
+  svg text { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .tip {
+    position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 14px rgb(0 0 0 / .12);
+    white-space: nowrap; display: none; font-variant-numeric: tabular-nums;
+  }
+  .tip b { font-size: 14px; }
+  .tip .muted { color: var(--text-muted); }
+  .empty { color: var(--text-muted); text-align: center; padding: 60px 0; }
+
+  .sessions, .usage, .health { margin-top: 12px; }
+  .usage svg { height: 200px; }
+  .summary { color: var(--text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .health .tiles { grid-template-columns: repeat(4, 1fr); margin: 10px 0 14px; }
+  @media (max-width: 760px) { .health .tiles { grid-template-columns: repeat(2, 1fr); } }
+  .health .tile { background: var(--bg); border-color: transparent; padding: 12px 14px; }
+  .health .tile .v { font-size: 20px; }
+  .note { color: var(--text-muted); font-size: 12px; margin-top: 10px; }
+  .sessions h2 { margin-bottom: 10px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th { text-align: left; color: var(--text-muted); font-weight: 500; font-size: 12px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  td { padding: 8px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  td.num, th.num { text-align: right; }
+  .tag { display: inline-flex; align-items: center; gap: 6px; }
+  .tag i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  footer { color: var(--text-muted); font-size: 12px; margin-top: 16px; }
+  code { font-family: Consolas, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>HyperX Cloud III S Wireless: battery</h1>
+    <div class="updated"><span class="dot" id="liveDot"></span><span id="updated">Loading…</span>
+      <div class="next" id="nextBar" title="Time until the logger's next check"><div></div></div>
+      <button class="check" id="checkNow" hidden>Check now</button></div>
+  </header>
+
+  <section class="top">
+    <div class="panel hero" id="hero"></div>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section class="panel">
+    <div class="chart-head">
+      <h2>Battery level</h2>
+      <div class="legend">
+        <span><i style="background:var(--charging)"></i>Charging</span>
+        <span><i style="background:var(--discharging)"></i>Discharging</span>
+      </div>
+      <div class="ranges" id="ranges">
+        <button data-r="1">24h</button><button data-r="7">7 days</button><button data-r="30">30 days</button><button data-r="0">All</button>
+      </div>
+    </div>
+    <div class="chart-wrap" id="chartWrap">
+      <svg id="chart" aria-label="Battery percentage over time"></svg>
+      <div class="tip" id="tip"></div>
+    </div>
+  </section>
+
+  <section class="panel usage">
+    <div class="chart-head">
+      <h2>Headset on-time per day</h2>
+      <div class="summary" id="usageSummary"></div>
+    </div>
+    <div class="chart-wrap" id="usageWrap">
+      <svg id="usageChart" aria-label="Hours the headset was on per day, last 14 days"></svg>
+      <div class="tip" id="usageTip"></div>
+    </div>
+  </section>
+
+  <section class="panel health">
+    <h2>Battery health</h2>
+    <div class="tiles" id="healthTiles"></div>
+    <div class="table-wrap"><table id="healthTable"></table></div>
+    <div class="note">A battery wears out slowly: over months the estimated runtime drops.
+      One charge cycle = 100% charged in total (for example 2 × 50%).</div>
+  </section>
+
+  <section class="panel sessions">
+    <h2>Sessions</h2>
+    <div class="table-wrap"><table id="sessions"></table></div>
+  </section>
+
+  <footer id="footer"></footer>
+</main>
+
+<script>
+const H = 3600e3, MIN = 60e3;
+const GAP = 12 * MIN;
+const MIN_SESSION = 10 * MIN;
+const VJUMP = 25;
+const AFTER_CHECK = 5e3;
+const RETRY = 30e3;
+
+let rangeDays = 7;
+try { const r = localStorage.getItem('range'); if (r !== null) rangeDays = +r; } catch {}
+let model = null;
+
+function load() {
+  return new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = 'data/battery_data.js?' + Date.now();
+    s.onload = () => {
+      s.remove();
+      if (window.BATTERY_DATA) {
+        model = build(window.BATTERY_DATA);
+        render();
+        const wait = nextCheck() - Date.now() + AFTER_CHECK;
+        schedule(isStale() ? RETRY : Math.max(wait, 5e3));
+      } else {
+        schedule(RETRY);
+      }
+      resolve();
+    };
+    s.onerror = () => { s.remove(); if (!model) renderMissing(); schedule(RETRY); resolve(); };
+    document.head.appendChild(s);
+  });
+}
+
+let checking = false;
+async function checkNow() {
+  const btn = document.getElementById('checkNow');
+  const before = model.data.live.t;
+  const done = (text) => {
+    btn.textContent = text;
+    setTimeout(() => { checking = false; btn.disabled = false; btn.textContent = 'Check now'; updateStatus(); }, 2000);
+  };
+  checking = true;
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+  try {
+    await fetch(`http://127.0.0.1:${model.data.live.port}/check`, { method: 'POST', mode: 'no-cors' });
+  } catch {
+    return done("Logger didn't answer");
+  }
+  for (let i = 0; i < 8; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    await load();
+    if (model.data.live.t !== before) return done('Updated ✓');
+  }
+  done("Logger didn't answer");
+}
+
+let loadTimer = null;
+function schedule(ms) { clearTimeout(loadTimer); loadTimer = setTimeout(load, ms); }
+
+const intervalMs = () => (model.data.live.interval || 60) * 1000;
+const nextCheck = () => model.data.live.next ? +new Date(model.data.live.next) : +new Date(model.data.live.t) + intervalMs();
+const isStale = () => Date.now() - +new Date(model.data.live.t) > Math.max(3 * intervalMs(), 5 * MIN);
+
+function updateStatus() {
+  if (!model) return;
+  const stale = isStale();
+  const liveMs = +new Date(model.data.live.t);
+  const left = nextCheck() - Date.now();
+  const sec = Math.max(0, Math.ceil(left / 1000));
+  document.getElementById('liveDot').classList.toggle('stale', stale);
+  document.getElementById('updated').textContent = stale
+    ? `Logger isn't running (last check ${fmtAgo(liveMs)})`
+    : `Live · checked ${Math.round((Date.now() - liveMs) / 1000)}s ago · next check ${
+        left > 0 ? `in ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` : 'now…'}`;
+  const bar = document.getElementById('nextBar');
+  bar.style.display = stale ? 'none' : '';
+  bar.firstElementChild.style.width = `${Math.min(100, Math.max(0, 100 - left / intervalMs() * 100))}%`;
+  if (!checking) document.getElementById('checkNow').hidden = stale || !model.data.live.port;
+}
+
+function build(data) {
+  const segs = [];
+  let cur = [];
+  for (const r of data.readings) {
+    if (r.state !== 'connected') { if (cur.length) segs.push(cur); cur = []; continue; }
+    const p = { t: +new Date(r.t), pct: r.pct, mv: r.mv, chg: r.chg };
+    if (cur.length && p.t - cur[cur.length - 1].t > GAP) { segs.push(cur); cur = []; }
+    cur.push(p);
+  }
+  if (cur.length) segs.push(cur);
+
+  for (const seg of segs) {
+    for (let i = 1; i < seg.length; i++) {
+      const dp = seg[i].pct - seg[i - 1].pct, dv = seg[i].mv - seg[i - 1].mv;
+      seg[i].dir = dp > 0 ? 'charging' : dp < 0 ? 'discharging'
+        : dv >= VJUMP ? 'charging' : dv <= -VJUMP ? 'discharging' : null;
+    }
+    for (const p of seg) if (p.chg !== undefined) p.dir = p.chg ? 'charging' : 'discharging';
+    const first = seg.find(p => p.dir)?.dir || 'discharging';
+    seg[0].dir = first;
+    for (let i = 1; i < seg.length; i++) if (!seg[i].dir) seg[i].dir = seg[i - 1].dir;
+  }
+
+  const sessions = [];
+  for (const seg of segs) {
+    let a = 0;
+    for (let i = 1; i <= seg.length; i++) {
+      if (i < seg.length && seg[i].dir === seg[a].dir) continue;
+      const dir = seg[a].dir;
+      const run = seg.slice(a > 0 ? a - 1 : a, i);
+      let end = run[run.length - 1];
+      if (dir === 'charging') {
+        const max = Math.max(...run.map(p => p.pct));
+        end = run.find(p => p.pct === max);
+      }
+      const start = run[0];
+      if (end.t - start.t >= MIN_SESSION) {
+        sessions.push({ dir, start: start.t, end: end.t, from: start.pct, to: end.pct,
+                        rate: (end.pct - start.pct) / ((end.t - start.t) / H) });
+      }
+      a = i;
+    }
+  }
+
+  const avg = (list) => {
+    const hrs = list.reduce((s, x) => s + (x.end - x.start) / H, 0);
+    const pct = list.reduce((s, x) => s + (x.to - x.from), 0);
+    return hrs > 0 && pct !== 0 ? pct / hrs : null;
+  };
+  const drain = avg(sessions.filter(s => s.dir === 'discharging' && s.end - s.start >= H && s.to < s.from));
+  const charge = avg(sessions.filter(s => s.dir === 'charging' && s.to > s.from));
+
+  const usage = [];
+  let on = null, lastT = null;
+  for (const r of data.readings) {
+    const t = +new Date(r.t);
+    if (r.state === 'connected') {
+      if (on !== null && t - lastT > GAP) { usage.push([on, lastT]); on = null; }
+      if (on === null) on = t;
+      lastT = t;
+    } else if (on !== null) { usage.push([on, t]); on = null; }
+  }
+  if (on !== null) {
+    const liveT = +new Date(data.live.t);
+    usage.push([on, data.live.state === 'connected' && liveT - lastT <= GAP ? liveT : lastT]);
+  }
+
+  const byDay = new Map();
+  for (let [a, b] of usage) {
+    while (a < b) {
+      const d = new Date(a); d.setHours(24, 0, 0, 0);
+      const end = Math.min(+d, b);
+      const key = dayKey(a);
+      byDay.set(key, (byDay.get(key) || 0) + (end - a));
+      a = end;
+    }
+  }
+
+  let charged = 0;
+  const chargedByMonth = new Map();
+  for (const seg of segs) for (let i = 1; i < seg.length; i++) {
+    const up = seg[i].pct - seg[i - 1].pct;
+    if (up > 0) {
+      charged += up;
+      const k = monthKey(seg[i].t);
+      chargedByMonth.set(k, (chargedByMonth.get(k) || 0) + up);
+    }
+  }
+
+  const months = new Map();
+  const month = (k) => months.get(k) || months.set(k, { key: k, onMs: 0, charged: 0, dis: [] }).get(k);
+  for (const [k, ms] of byDay) month(k.slice(0, 7)).onMs += ms;
+  for (const [k, pct] of chargedByMonth) month(k).charged = pct;
+  for (const s of sessions) if (s.dir === 'discharging' && s.end - s.start >= H && s.to < s.from) month(monthKey(s.start)).dis.push(s);
+  const monthly = [...months.values()].sort((a, b) => a.key.localeCompare(b.key))
+    .map(m => ({ ...m, drain: avg(m.dis) }));
+
+  return { data, segs, sessions, drain, charge, flat: segs.flat(), usage, byDay, charged, monthly };
+}
+
+function dayKey(ms) {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const monthKey = (ms) => dayKey(ms).slice(0, 7);
+
+const fmtDur = (ms) => {
+  const m = Math.round(ms / MIN);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ${String(m % 60).padStart(2, '0')}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+};
+const fmtDate = (ms) => new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const fmtAgo = (ms) => { const s = (Date.now() - ms) / 1000; return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : `${fmtDur(s * 1000)} ago`; };
+const label = (dir) => dir === 'charging' ? 'Charging' : 'Discharging';
+const color = (dir) => `var(--${dir})`;
+
+function render() {
+  const { data, flat, drain, charge } = model;
+  const live = data.live;
+  const stale = isStale();
+  updateStatus();
+
+  const last = flat[flat.length - 1];
+  const connected = live.state === 'connected' && !stale;
+  const hero = document.getElementById('hero');
+  if (!last) {
+    hero.innerHTML = `<div class="label">Battery</div><div class="big">–</div><div class="sub">No readings yet. Turn the headset on.</div>`;
+  } else {
+    const dir = last.dir;
+    let sub = `${(last.mv / 1000).toFixed(3)} V`;
+    if (connected && dir === 'discharging' && drain) sub += ` · about ${fmtDur(last.pct / -drain * H)} left`;
+    if (connected && dir === 'charging' && charge && last.pct < 100) sub += ` · full in about ${fmtDur((100 - last.pct) / charge * H)}`;
+    if (connected && dir === 'charging' && last.pct === 100) sub += ' · fully charged';
+    if (connected && live.mic) sub += live.mic === 'muted' ? ' · mic muted' : ' · mic on';
+    const stateHtml = connected
+      ? `<span class="state"><i style="background:${color(dir)}"></i>${label(dir)}</span>`
+      : `<span class="state" style="color:var(--text-muted)">Disconnected · last seen ${fmtAgo(last.t)}</span>`;
+    hero.innerHTML = `<div class="label">Battery now</div>
+      <div class="big">${last.pct}%</div>${stateHtml}
+      <div class="sub">${sub}</div>
+      <div class="bar"><div style="width:${last.pct}%;background:${last.pct <= 15 ? 'var(--critical)' : connected ? color(dir) : 'var(--text-muted)'}"></div></div>`;
+  }
+
+  const tiles = [
+    ['Average drain', drain ? `${(-drain).toFixed(2)} %/h` : '–', drain ? 'while in use, unplugged' : 'needs 1h+ unplugged'],
+    ['Full-charge runtime', drain ? fmtDur(100 / -drain * H) : '–', drain ? 'estimated 100% → 0%' : 'needs 1h+ unplugged'],
+    ['Charging speed', charge ? `${charge.toFixed(1)} %/h` : '–', charge ? 'average on cable' : 'needs a charge session'],
+    ['Full charge time', charge ? fmtDur(100 / charge * H) : '–', charge ? 'estimated 0% → 100%' : 'needs a charge session'],
+  ];
+  document.getElementById('tiles').innerHTML = tiles.map(([k, v, s]) =>
+    `<div class="panel tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('');
+
+  renderChart();
+  renderUsage();
+  renderHealth();
+  renderSessions();
+
+  document.getElementById('footer').innerHTML =
+    `${data.readings.length} readings saved in <code>data/battery_log.json</code> · page updates after every check`;
+}
+
+function renderMissing() {
+  document.getElementById('updated').textContent = 'No data file found';
+  document.getElementById('liveDot').classList.add('stale');
+  document.getElementById('nextBar').style.display = 'none';
+  document.getElementById('hero').innerHTML = `<div class="label">Battery</div><div class="big">–</div>
+    <div class="sub">Start the logger: <code>python hyperx_battery_logger.py</code></div>`;
+  document.getElementById('chart').innerHTML = '';
+}
+
+function renderChart() {
+  const svg = document.getElementById('chart');
+  const wrap = document.getElementById('chartWrap');
+  const W = wrap.clientWidth, Hh = 300;
+  const m = { l: 40, r: 12, t: 10, b: 28 };
+  const iw = W - m.l - m.r, ih = Hh - m.t - m.b;
+  svg.setAttribute('viewBox', `0 0 ${W} ${Hh}`);
+
+  const flat = model.flat;
+  if (!flat.length) { svg.innerHTML = ''; return; }
+  const tMax = Math.max(Date.now(), flat[flat.length - 1].t);
+  const tMin = rangeDays ? tMax - rangeDays * 24 * H : flat[0].t;
+  const x = (t) => m.l + (t - tMin) / (tMax - tMin || 1) * iw;
+  const y = (p) => m.t + (1 - p / 100) * ih;
+
+  let out = '';
+  for (const p of [0, 25, 50, 75, 100]) {
+    out += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(p)}" y2="${y(p)}" stroke="var(--grid)" stroke-width="1"/>`;
+    out += `<text x="${m.l - 8}" y="${y(p) + 4}" text-anchor="end">${p}%</text>`;
+  }
+  for (const t of ticks(tMin, tMax, iw)) {
+    out += `<line x1="${x(t.t)}" x2="${x(t.t)}" y1="${m.t + ih}" y2="${m.t + ih + 4}" stroke="var(--border)"/>`;
+    out += `<text x="${x(t.t)}" y="${Hh - 8}" text-anchor="middle">${t.label}</text>`;
+  }
+
+  const visible = [];
+  for (const seg of model.segs) {
+    const pts = seg.filter((p, i) => p.t >= tMin || (seg[i + 1] && seg[i + 1].t >= tMin));
+    if (!pts.length) continue;
+    visible.push(...pts.filter(p => p.t >= tMin));
+    let run = [pts[0]], lastX = -1;
+    const flush = () => {
+      if (run.length > 1) out += `<path d="M${run.map(p => `${x(Math.max(p.t, tMin)).toFixed(1)},${y(p.pct).toFixed(1)}`).join('L')}" fill="none" stroke="${color(run[run.length - 1].dir)}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+      else if (run.length === 1) out += `<circle cx="${x(run[0].t)}" cy="${y(run[0].pct)}" r="2" fill="${color(run[0].dir)}"/>`;
+    };
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i];
+      if (p.dir !== pts[i - 1].dir && i > 1) { flush(); run = [pts[i - 1]]; }
+      const px = Math.round(x(p.t));
+      if (px !== lastX || i === pts.length - 1 || pts[i + 1]?.dir !== p.dir) { run.push(p); lastX = px; }
+    }
+    flush();
+  }
+  if (!visible.length) out += `<text x="${m.l + iw / 2}" y="${m.t + ih / 2}" text-anchor="middle" style="font-size:13px">No readings in this range</text>`;
+
+  out += `<line id="cross" y1="${m.t}" y2="${m.t + ih}" stroke="var(--text-muted)" stroke-dasharray="3 3" visibility="hidden"/>`;
+  out += `<circle id="hoverDot" r="5" stroke="var(--surface)" stroke-width="2" visibility="hidden"/>`;
+  out += `<rect id="hit" x="${m.l}" y="${m.t}" width="${iw}" height="${ih}" fill="transparent"/>`;
+  svg.innerHTML = out;
+
+  const tip = document.getElementById('tip');
+  const cross = svg.getElementById('cross'), dot = svg.getElementById('hoverDot');
+  const hit = svg.getElementById('hit');
+  const hide = () => { tip.style.display = 'none'; cross.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); };
+  hit.addEventListener('mouseleave', hide);
+  hit.addEventListener('mousemove', (e) => {
+    if (!visible.length) return;
+    const rect = svg.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * (W / rect.width);
+    const t = tMin + (mx - m.l) / iw * (tMax - tMin);
+    let lo = 0, hi = visible.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; visible[mid].t < t ? lo = mid : hi = mid; }
+    const p = Math.abs(visible[lo].t - t) < Math.abs(visible[hi].t - t) ? visible[lo] : visible[hi];
+    if (Math.abs(x(p.t) - mx) > 40) return hide();
+    cross.setAttribute('x1', x(p.t)); cross.setAttribute('x2', x(p.t)); cross.setAttribute('visibility', 'visible');
+    dot.setAttribute('cx', x(p.t)); dot.setAttribute('cy', y(p.pct)); dot.setAttribute('fill', color(p.dir)); dot.setAttribute('visibility', 'visible');
+    tip.innerHTML = `<b>${p.pct}%</b> · ${label(p.dir)}<br><span class="muted">${fmtDate(p.t)} · ${(p.mv / 1000).toFixed(3)} V</span>`;
+    tip.style.display = 'block';
+    const px = x(p.t) / W * rect.width;
+    const left = px + 14 + tip.offsetWidth > rect.width ? px - 14 - tip.offsetWidth : px + 14;
+    tip.style.left = left + 'px';
+    tip.style.top = Math.max(0, y(p.pct) / Hh * rect.height - tip.offsetHeight - 10) + 'px';
+  });
+}
+
+function ticks(tMin, tMax, width) {
+  const steps = [H, 3 * H, 6 * H, 12 * H, 24 * H, 2 * 24 * H, 7 * 24 * H, 14 * 24 * H, 30 * 24 * H];
+  const maxTicks = Math.max(2, Math.floor(width / 80));
+  const step = steps.find(s => (tMax - tMin) / s <= maxTicks) || steps[steps.length - 1];
+  const d = new Date(tMin);
+  d.setMinutes(0, 0, 0);
+  if (step >= 24 * H) d.setHours(0);
+  const out = [];
+  for (let t = +d; t <= tMax; t = step >= 24 * H ? +new Date(new Date(t).setDate(new Date(t).getDate() + step / (24 * H))) : t + H) {
+    if (t < tMin) continue;
+    const dt = new Date(t);
+    if (step < 24 * H && dt.getHours() % (step / H) !== 0) continue;
+    const midnight = dt.getHours() === 0;
+    out.push({ t, label: step < 24 * H && !midnight
+      ? dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+      : dt.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) });
+  }
+  return out;
+}
+
+function renderUsage() {
+  const svg = document.getElementById('usageChart');
+  const wrap = document.getElementById('usageWrap');
+  const W = wrap.clientWidth, Hh = 200;
+  const m = { l: 40, r: 12, t: 10, b: 28 };
+  const iw = W - m.l - m.r, ih = Hh - m.t - m.b;
+  svg.setAttribute('viewBox', `0 0 ${W} ${Hh}`);
+
+  const days = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - i);
+    days.push({ d, key: dayKey(+d), ms: model.byDay.get(dayKey(+d)) || 0 });
+  }
+  const maxH = Math.max(4, Math.ceil(Math.max(...days.map(d => d.ms / H)) / 4) * 4);
+  const y = (h) => m.t + (1 - h / maxH) * ih;
+  const slot = iw / days.length, bw = Math.max(4, Math.min(36, slot - 6));
+
+  let out = '';
+  for (let h = 0; h <= maxH; h += maxH / 4) {
+    out += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(h)}" y2="${y(h)}" stroke="var(--grid)"/>`;
+    out += `<text x="${m.l - 8}" y="${y(h) + 4}" text-anchor="end">${h}h</text>`;
+  }
+  days.forEach((d, i) => {
+    const cx = m.l + slot * (i + 0.5), hrs = d.ms / H;
+    if (hrs > 0) {
+      const top = y(hrs), hgt = m.t + ih - top, r = Math.min(4, bw / 2, hgt);
+      out += `<path d="M${cx - bw / 2},${m.t + ih} V${top + r} q0,-${r} ${r},-${r} H${cx + bw / 2 - r} q${r},0 ${r},${r} V${m.t + ih} Z" fill="var(--usage)"/>`;
+    }
+    if (days.length <= 14 && (slot >= 34 || i % 2 === 1)) {
+      out += `<text x="${cx}" y="${Hh - 8}" text-anchor="middle">${d.d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</text>`;
+    }
+    out += `<rect class="hit" data-i="${i}" x="${cx - slot / 2}" y="${m.t}" width="${slot}" height="${ih}" fill="transparent"/>`;
+  });
+  svg.innerHTML = out;
+
+  const tip = document.getElementById('usageTip');
+  svg.onmousemove = (e) => {
+    const hit = e.target.closest('.hit');
+    if (!hit) { tip.style.display = 'none'; return; }
+    const d = days[+hit.dataset.i];
+    tip.innerHTML = `<b>${d.ms ? fmtDur(d.ms) : 'not used'}</b><br><span class="muted">${d.d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })}</span>`;
+    tip.style.display = 'block';
+    const rect = svg.getBoundingClientRect();
+    const cx = (m.l + slot * (+hit.dataset.i + 0.5)) / W * rect.width;
+    tip.style.left = Math.min(rect.width - tip.offsetWidth, Math.max(0, cx - tip.offsetWidth / 2)) + 'px';
+    tip.style.top = '0px';
+  };
+  svg.onmouseleave = () => { tip.style.display = 'none'; };
+
+  const week = days.slice(-7).reduce((s, d) => s + d.ms, 0);
+  const today = days[days.length - 1].ms;
+  document.getElementById('usageSummary').textContent =
+    `Today ${fmtDur(today)} · last 7 days ${fmtDur(week)} (avg ${fmtDur(week / 7)}/day)`;
+}
+
+function renderHealth() {
+  const { monthly, charged, data } = model;
+  const withDrain = monthly.filter(m => m.drain);
+  const first = withDrain[0], latest = withDrain[withDrain.length - 1];
+  let trend = ['–', 'needs 2+ months of data'];
+  if (withDrain.length >= 2) {
+    const change = (first.drain / latest.drain - 1) * 100;
+    trend = [`${change >= 0 ? '+' : ''}${change.toFixed(0)}%`, `runtime ${fmtMonth(first.key)} → ${fmtMonth(latest.key)}`];
+  }
+  const since = data.readings.length ? new Date(data.readings[0].t) : null;
+  const tiles = [
+    ['Charge cycles', (charged / 100).toFixed(1), `${charged}% charged in total`],
+    ['Runtime now', latest ? fmtDur(100 / -latest.drain * H) : '–', latest ? `full charge, ${fmtMonth(latest.key)}` : 'needs 1h+ unplugged'],
+    ['Runtime change', ...trend],
+    ['Tracking since', since ? since.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '–',
+      since ? `${Math.max(1, Math.round((Date.now() - since) / (24 * H)))} days` : ''],
+  ];
+  document.getElementById('healthTiles').innerHTML = tiles.map(([k, v, sub]) =>
+    `<div class="panel tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join('');
+
+  document.getElementById('healthTable').innerHTML = monthly.length
+    ? `<tr><th>Month</th><th class="num">Headset on</th><th class="num">Charged</th><th class="num">Cycles</th><th class="num">Avg drain</th><th class="num">Est. runtime</th></tr>` +
+      [...monthly].reverse().map(mo => `<tr><td>${fmtMonth(mo.key)}</td>
+        <td class="num">${Math.round(mo.onMs / H)}h</td><td class="num">${mo.charged}%</td>
+        <td class="num">${(mo.charged / 100).toFixed(1)}</td>
+        <td class="num">${mo.drain ? (-mo.drain).toFixed(2) + ' %/h' : '–'}</td>
+        <td class="num">${mo.drain ? fmtDur(100 / -mo.drain * H) : '–'}</td></tr>`).join('')
+    : '';
+}
+const fmtMonth = (k) => new Date(k + '-15').toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+
+function renderSessions() {
+  const list = [...model.sessions].reverse().slice(0, 60);
+  const el = document.getElementById('sessions');
+  if (!list.length) { el.innerHTML = `<tr><td class="empty" style="padding:24px 0">No sessions longer than 10 minutes yet.</td></tr>`; return; }
+  el.innerHTML = `<tr><th>Type</th><th>Start</th><th>End</th><th class="num">Duration</th><th class="num">Battery</th><th class="num">Rate</th></tr>` +
+    list.map(s => `<tr>
+      <td><span class="tag"><i style="background:${color(s.dir)}"></i>${label(s.dir)}</span></td>
+      <td>${fmtDate(s.start)}</td><td>${fmtDate(s.end)}</td>
+      <td class="num">${fmtDur(s.end - s.start)}</td>
+      <td class="num">${s.from}% → ${s.to}%</td>
+      <td class="num">${s.rate >= 0 ? '+' : ''}${s.rate.toFixed(2)} %/h</td></tr>`).join('');
+}
+
+document.getElementById('ranges').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  rangeDays = +b.dataset.r;
+  try { localStorage.setItem('range', rangeDays); } catch {}
+  syncRanges();
+  if (model) renderChart();
+});
+function syncRanges() {
+  for (const b of document.querySelectorAll('#ranges button')) b.setAttribute('aria-pressed', +b.dataset.r === rangeDays);
+}
+window.addEventListener('resize', () => { if (model) { renderChart(); renderUsage(); } });
+syncRanges();
+document.getElementById('checkNow').addEventListener('click', checkNow);
+load();
+setInterval(updateStatus, 1000);
+setInterval(() => model && isStale() && render(), 60e3);
+</script>
+</body>
+</html>
