@@ -127,30 +127,35 @@ hyperx_battery_logger.py   the logger (tray icon, notifications, saving)
 battery_dashboard.html     the dashboard, open it in any browser
 install_autostart.ps1      start with Windows / -Uninstall
 requirements.txt           Python packages
+tests/                     unit tests (python -m unittest discover -s tests)
 data/
-  battery_log.json         all readings (your history, keep this file)
-  battery_data.js          same data for the dashboard (rewritten every check)
+  battery_log.jsonl        all readings, one JSON object per line (your history, keep this file)
+  battery_data.js          the same readings for the dashboard
+  battery_live.js          the latest check (rewritten every check, a few hundred bytes)
   settings.json            tray menu settings (the 80% alert)
+  logger.log               errors and warnings
   logger.lock              stops a second logger from running at the same time
 docs/                      README images
 ```
 
-A reading is saved when something changes (battery %, charging, mic) or at least every 5 minutes. A year of use is about 5–10 MB. Each reading looks like this:
+A reading is saved when something changes (battery %, charging, mic) or at least every 5 minutes. New readings are **appended** to the end of the log, so the history is never rewritten. A year of use is about 5–10 MB. Each line looks like this:
 
 ```json
-{"t": "2026-10-31T09:54:39", "state": "connected", "pct": 92, "mv": 4174, "chg": 1, "mic": "muted"}
+{"t": "2026-10-31T09:54:39+02:00", "state": "connected", "pct": 92, "mv": 4174, "chg": 1, "mic": "muted"}
 ```
 
 | Field     | Meaning                                                                                                                              |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `t`     | local time of the reading                                                                                                            |
+| `t`     | local time of the reading, with the UTC offset (older readings may have no offset; they're read as local time)                     |
 | `state` | `connected`, or `disconnected` (headset off / dongle unplugged / out of range)                                                   |
 | `pct`   | battery % (0–100)                                                                                                                   |
 | `mv`    | battery voltage in millivolts                                                                                                        |
 | `chg`   | `1` = cable plugged in, `0` = not. Missing when unknown (right after the logger starts, until the cable is plugged or unplugged) |
 | `mic`   | `muted` or `live`                                                                                                                |
 
-`battery_data.js` exists because browsers don't let a page opened from your disk read a `.json` file. The dashboard loads the same data through a `<script>` tag instead.
+The `.js` files exist because browsers don't let a page opened from your disk read a `.json` file. The dashboard loads the data through `<script>` tags instead. It reloads the small `battery_live.js` after every check, and `battery_data.js` only when a new reading was added.
+
+If the log gets damaged (for example by a power cut mid-write), the logger skips the broken lines, keeps the original as `battery_log.jsonl.bad-<date>` and carries on. Logs from older versions (`battery_log.json`) are converted automatically on the first start, and the old file is kept as `battery_log.json.bak`.
 
 Logger options:
 
@@ -185,7 +190,7 @@ The dongle shows up as a USB HID device. The logger opens its vendor collection 
 
 Charging can't be asked for; it's only known from the `0a` event. Until that event arrives, the logger and dashboard guess charging from the battery trend: the % rising, or the voltage jumping by more than 25 mV when the cable is plugged in or pulled out.
 
-**Check now from the dashboard:** a page opened from disk can't talk to a program directly, so the logger also listens on `http://127.0.0.1:47821`. Only your own PC can reach it, and the only thing it accepts is `POST /check`, which triggers an immediate reading. If that port is taken, the logger runs without it and the dashboard hides the button.
+**Check now from the dashboard:** a page opened from disk can't talk to a program directly, so the logger also listens on `http://127.0.0.1:47821`. Only your own PC can reach it, and the only thing it accepts is `POST /check`, which triggers an immediate reading. Requests from websites are refused (only the local dashboard and local tools are allowed), so a page you visit can't trigger checks. If that port is taken, the logger runs without it and the dashboard hides the button.
 
 The battery command and the battery and power events come from [gear-tray](https://github.com/dddd-zdf/gear-tray). The charging and mic events were found by watching the headset while plugging and unplugging the cable and pressing mute.
 
@@ -197,6 +202,7 @@ The battery command and the battery and power events come from [gear-tray](https
 | `ModuleNotFoundError: No module named 'hid'` | Install `hidapi` with the same Python you run the script with: `python -m pip install hidapi`.           |
 | Dashboard says "No data file found"            | The logger hasn't run yet. Start it (step 3), then reload the page.                                          |
 | Red dot: "Logger isn't running"                | It was quit, disabled in Task Manager, or Python crashed. Run `install_autostart.ps1` again to restart it. |
+| Something looks wrong                          | Check `data/logger.log`. Errors are written there; the logger keeps running and retries after an error.     |
 | "Another logger is already running."           | Only one copy can run at a time. Quit it from the tray icon first.                                           |
 | Charging shows as guessed right after startup  | Normal. The exact state arrives with the next plug or unplug of the cable.                                   |
 

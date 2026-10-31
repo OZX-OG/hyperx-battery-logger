@@ -19,6 +19,7 @@
     --usage: #1baf7a;
     --critical: #d03b3b;
     --good: #0ca30c;
+    --warning: #b07800;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -33,13 +34,14 @@
       --charging: #3987e5;
       --discharging: #d95926;
       --usage: #199e70;
+      --warning: #e0a526;
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
     --bg: #111110; --surface: #1a1a19; --border: #2c2c2a; --grid: #262624;
     --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8a8984;
-    --charging: #3987e5; --discharging: #d95926; --usage: #199e70;
+    --charging: #3987e5; --discharging: #d95926; --usage: #199e70; --warning: #e0a526;
   }
 
   * { box-sizing: border-box; }
@@ -50,7 +52,7 @@
   main { max-width: 1080px; margin: 0 auto; padding: 28px 16px 48px; }
   header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
   h1 { font-size: 18px; font-weight: 600; margin: 0; }
-  .updated { color: var(--text-muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .updated { color: var(--text-muted); font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
   .dot.stale { background: var(--critical); }
   .updated span { font-variant-numeric: tabular-nums; }
@@ -66,6 +68,7 @@
   .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
   .top { display: grid; grid-template-columns: minmax(240px, 1.1fr) 2fr; gap: 12px; margin-bottom: 12px; }
   @media (max-width: 760px) { .top { grid-template-columns: 1fr; } }
+  @media (max-width: 520px) { .top .tiles { grid-template-columns: 1fr; } }
 
   .hero .label { color: var(--text-secondary); font-size: 13px; }
   .hero .big { font-size: 56px; font-weight: 600; line-height: 1.05; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
@@ -76,9 +79,12 @@
   .bar > div { height: 100%; border-radius: 4px; background: var(--text-secondary); }
 
   .tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-  .tile .k { color: var(--text-secondary); font-size: 13px; }
+  .tile .k { color: var(--text-secondary); font-size: 13px; display: flex; justify-content: space-between; align-items: center; gap: 4px 8px; flex-wrap: wrap; }
   .tile .v { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .tile .s { color: var(--text-muted); font-size: 12px; }
+  .conf { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+  .conf i { width: 7px; height: 7px; border-radius: 50%; }
+  .tiles .note { grid-column: 1 / -1; margin: 0; }
 
   .chart-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
   .chart-head h2, .sessions h2, .health h2 { font-size: 15px; font-weight: 600; margin: 0; }
@@ -188,6 +194,11 @@ const H = 3600e3, MIN = 60e3;
 const GAP = 12 * MIN;
 const MIN_SESSION = 10 * MIN;
 const VJUMP = 25;
+const SURE = 100;
+const confidence = (pct) =>
+  pct >= SURE ? { level: 2, label: 'Reliable', color: 'var(--good)' }
+  : pct >= SURE * 0.3 ? { level: 1, label: 'Getting better', color: 'var(--warning)' }
+  : { level: 0, label: 'Early estimate', color: 'var(--critical)' };
 const AFTER_CHECK = 5e3;
 const RETRY = 30e3;
 
@@ -195,25 +206,32 @@ let rangeDays = 7;
 try { const r = localStorage.getItem('range'); if (r !== null) rangeDays = +r; } catch {}
 let model = null;
 
-function load() {
-  return new Promise((resolve) => {
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = 'data/battery_data.js?' + Date.now();
-    s.onload = () => {
-      s.remove();
-      if (window.BATTERY_DATA) {
-        model = build(window.BATTERY_DATA);
-        render();
-        const wait = nextCheck() - Date.now() + AFTER_CHECK;
-        schedule(isStale() ? RETRY : Math.max(wait, 5e3));
-      } else {
-        schedule(RETRY);
-      }
-      resolve();
-    };
-    s.onerror = () => { s.remove(); if (!model) renderMissing(); schedule(RETRY); resolve(); };
+    s.src = src + '?' + Date.now();
+    s.onload = () => { s.remove(); resolve(); };
+    s.onerror = () => { s.remove(); reject(); };
     document.head.appendChild(s);
   });
+}
+
+let loadedCount = -1;
+async function load() {
+  try {
+    await loadScript('data/battery_live.js');
+    if (window.BATTERY_LIVE.count !== loadedCount || !window.BATTERY_READINGS) {
+      await loadScript('data/battery_data.js');
+      loadedCount = window.BATTERY_LIVE.count;
+    }
+  } catch {
+    if (!model) renderMissing();
+    return schedule(RETRY);
+  }
+  model = build({ live: window.BATTERY_LIVE, readings: window.BATTERY_READINGS });
+  render();
+  const wait = nextCheck() - Date.now() + AFTER_CHECK;
+  schedule(isStale() ? RETRY : Math.max(wait, 5e3));
 }
 
 let checking = false;
@@ -313,8 +331,16 @@ function build(data) {
     const pct = list.reduce((s, x) => s + (x.to - x.from), 0);
     return hrs > 0 && pct !== 0 ? pct / hrs : null;
   };
-  const drain = avg(sessions.filter(s => s.dir === 'discharging' && s.end - s.start >= H && s.to < s.from));
-  const charge = avg(sessions.filter(s => s.dir === 'charging' && s.to > s.from));
+  const drainList = sessions.filter(s => s.dir === 'discharging' && s.end - s.start >= H && s.to < s.from);
+  const chargeList = sessions.filter(s => s.dir === 'charging' && s.to > s.from);
+  const drain = avg(drainList);
+  const charge = avg(chargeList);
+  const seen = (list) => ({
+    pct: list.reduce((s, x) => s + Math.abs(x.to - x.from), 0),
+    hrs: list.reduce((s, x) => s + (x.end - x.start) / H, 0),
+  });
+  const drainSeen = seen(drainList);
+  const chargeSeen = seen(chargeList);
 
   const usage = [];
   let on = null, lastT = null;
@@ -361,7 +387,7 @@ function build(data) {
   const monthly = [...months.values()].sort((a, b) => a.key.localeCompare(b.key))
     .map(m => ({ ...m, drain: avg(m.dis) }));
 
-  return { data, segs, sessions, drain, charge, flat: segs.flat(), usage, byDay, charged, monthly };
+  return { data, segs, sessions, drain, charge, drainSeen, chargeSeen, flat: segs.flat(), usage, byDay, charged, monthly };
 }
 
 function dayKey(ms) {
@@ -383,7 +409,7 @@ const label = (dir) => dir === 'charging' ? 'Charging' : 'Discharging';
 const color = (dir) => `var(--${dir})`;
 
 function render() {
-  const { data, flat, drain, charge } = model;
+  const { data, flat, drain, charge, drainSeen, chargeSeen } = model;
   const live = data.live;
   const stale = isStale();
   updateStatus();
@@ -392,12 +418,12 @@ function render() {
   const connected = live.state === 'connected' && !stale;
   const hero = document.getElementById('hero');
   if (!last) {
-    hero.innerHTML = `<div class="label">Battery</div><div class="big">–</div><div class="sub">No readings yet. Turn the headset on.</div>`;
+    hero.innerHTML = `<div class="label">Battery</div><div class="big">-</div><div class="sub">No readings yet. Turn the headset on.</div>`;
   } else {
     const dir = last.dir;
     let sub = `${(last.mv / 1000).toFixed(3)} V`;
-    if (connected && dir === 'discharging' && drain) sub += ` · about ${fmtDur(last.pct / -drain * H)} left`;
-    if (connected && dir === 'charging' && charge && last.pct < 100) sub += ` · full in about ${fmtDur((100 - last.pct) / charge * H)}`;
+    if (connected && dir === 'discharging' && drain) sub += ` · about ${fmtDur(last.pct / -drain * H)} left from ${last.pct}%`;
+    if (connected && dir === 'charging' && charge && last.pct < 100) sub += ` · full in about ${fmtDur((100 - last.pct) / charge * H)} from ${last.pct}%`;
     if (connected && dir === 'charging' && last.pct === 100) sub += ' · fully charged';
     if (connected && live.mic) sub += live.mic === 'muted' ? ' · mic muted' : ' · mic on';
     const stateHtml = connected
@@ -409,14 +435,24 @@ function render() {
       <div class="bar"><div style="width:${last.pct}%;background:${last.pct <= 15 ? 'var(--critical)' : connected ? color(dir) : 'var(--text-muted)'}"></div></div>`;
   }
 
+  const dConf = drain ? confidence(drainSeen.pct) : null;
+  const cConf = charge ? confidence(chargeSeen.pct) : null;
   const tiles = [
-    ['Average drain', drain ? `${(-drain).toFixed(2)} %/h` : '–', drain ? 'while in use, unplugged' : 'needs 1h+ unplugged'],
-    ['Full-charge runtime', drain ? fmtDur(100 / -drain * H) : '–', drain ? 'estimated 100% → 0%' : 'needs 1h+ unplugged'],
-    ['Charging speed', charge ? `${charge.toFixed(1)} %/h` : '–', charge ? 'average on cable' : 'needs a charge session'],
-    ['Full charge time', charge ? fmtDur(100 / charge * H) : '–', charge ? 'estimated 0% → 100%' : 'needs a charge session'],
+    ['Average drain', drain ? `${(-drain).toFixed(2)} %/h` : '-', drain ? 'while in use, unplugged' : 'needs 1h+ unplugged', dConf],
+    ['Runtime on a full charge', drain ? fmtDur(100 / -drain * H) : '-', drain ? 'from 100% to 0%, not from your current level' : 'needs 1h+ unplugged', dConf],
+    ['Charging speed', charge ? `${charge.toFixed(1)} %/h` : '-', charge ? 'average on cable' : 'needs a charge session', cConf],
+    ['Charge time from empty', charge ? fmtDur(100 / charge * H) : '-', charge ? 'from 0% to 100%, not from your current level' : 'needs a charge session', cConf],
   ];
-  document.getElementById('tiles').innerHTML = tiles.map(([k, v, s]) =>
-    `<div class="panel tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('');
+  const pill = (c) => c ? `<span class="conf"><i style="background:${c.color}"></i>${c.label}</span>` : '';
+  const notes = [];
+  if (dConf && dConf.level < 2) notes.push(`${Math.round(drainSeen.pct)}% of battery used over ${fmtDur(drainSeen.hrs * H)}`);
+  if (cConf && cConf.level < 2) notes.push(`${Math.round(chargeSeen.pct)}% charged over ${fmtDur(chargeSeen.hrs * H)}`);
+  const note = notes.length
+    ? `<div class="note">These estimates are still learning: so far they are based on ${notes.join(' and ')}.
+       They can be off for now and get accurate once about ${SURE}% has been recorded each way (one full discharge and one full charge, spread over any number of days).</div>`
+    : '';
+  document.getElementById('tiles').innerHTML = tiles.map(([k, v, s, c]) =>
+    `<div class="panel tile"><div class="k">${k}${pill(c)}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('') + note;
 
   renderChart();
   renderUsage();
@@ -424,14 +460,14 @@ function render() {
   renderSessions();
 
   document.getElementById('footer').innerHTML =
-    `${data.readings.length} readings saved in <code>data/battery_log.json</code> · page updates after every check`;
+    `${data.readings.length} readings saved in <code>data/battery_log.jsonl</code> · page updates after every check`;
 }
 
 function renderMissing() {
   document.getElementById('updated').textContent = 'No data file found';
   document.getElementById('liveDot').classList.add('stale');
   document.getElementById('nextBar').style.display = 'none';
-  document.getElementById('hero').innerHTML = `<div class="label">Battery</div><div class="big">–</div>
+  document.getElementById('hero').innerHTML = `<div class="label">Battery</div><div class="big">-</div>
     <div class="sub">Start the logger: <code>python hyperx_battery_logger.py</code></div>`;
   document.getElementById('chart').innerHTML = '';
 }
@@ -590,7 +626,7 @@ function renderHealth() {
   const { monthly, charged, data } = model;
   const withDrain = monthly.filter(m => m.drain);
   const first = withDrain[0], latest = withDrain[withDrain.length - 1];
-  let trend = ['–', 'needs 2+ months of data'];
+  let trend = ['-', 'needs 2+ months of data'];
   if (withDrain.length >= 2) {
     const change = (first.drain / latest.drain - 1) * 100;
     trend = [`${change >= 0 ? '+' : ''}${change.toFixed(0)}%`, `runtime ${fmtMonth(first.key)} → ${fmtMonth(latest.key)}`];
@@ -598,9 +634,9 @@ function renderHealth() {
   const since = data.readings.length ? new Date(data.readings[0].t) : null;
   const tiles = [
     ['Charge cycles', (charged / 100).toFixed(1), `${charged}% charged in total`],
-    ['Runtime now', latest ? fmtDur(100 / -latest.drain * H) : '–', latest ? `full charge, ${fmtMonth(latest.key)}` : 'needs 1h+ unplugged'],
+    ['Runtime now', latest ? fmtDur(100 / -latest.drain * H) : '-', latest ? `full charge, ${fmtMonth(latest.key)}` : 'needs 1h+ unplugged'],
     ['Runtime change', ...trend],
-    ['Tracking since', since ? since.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '–',
+    ['Tracking since', since ? since.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '-',
       since ? `${Math.max(1, Math.round((Date.now() - since) / (24 * H)))} days` : ''],
   ];
   document.getElementById('healthTiles').innerHTML = tiles.map(([k, v, sub]) =>
@@ -611,8 +647,8 @@ function renderHealth() {
       [...monthly].reverse().map(mo => `<tr><td>${fmtMonth(mo.key)}</td>
         <td class="num">${Math.round(mo.onMs / H)}h</td><td class="num">${mo.charged}%</td>
         <td class="num">${(mo.charged / 100).toFixed(1)}</td>
-        <td class="num">${mo.drain ? (-mo.drain).toFixed(2) + ' %/h' : '–'}</td>
-        <td class="num">${mo.drain ? fmtDur(100 / -mo.drain * H) : '–'}</td></tr>`).join('')
+        <td class="num">${mo.drain ? (-mo.drain).toFixed(2) + ' %/h' : '-'}</td>
+        <td class="num">${mo.drain ? fmtDur(100 / -mo.drain * H) : '-'}</td></tr>`).join('')
     : '';
 }
 const fmtMonth = (k) => new Date(k + '-15').toLocaleDateString(undefined, { month: 'short', year: 'numeric' });

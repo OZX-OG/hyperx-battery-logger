@@ -10,7 +10,8 @@ Usage:
 
 import argparse
 import json
-import msvcrt
+import logging
+import logging.handlers
 import os
 import sys
 import threading
@@ -18,7 +19,16 @@ import time
 import webbrowser
 from datetime import datetime
 
-import hid
+try:
+    import hid
+    hid.device
+except (ImportError, AttributeError):
+    sys.exit("This needs the 'hidapi' package (not 'hid'): python -m pip install hidapi")
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 VENDOR_ID = 0x03F0
 PRODUCT_ID = 0x06BE
@@ -37,18 +47,24 @@ EV_POWER = 0x0C
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(HERE, "data")
-JSON_PATH = os.path.join(DATA_DIR, "battery_log.json")
+LOG_PATH = os.path.join(DATA_DIR, "battery_log.jsonl")
+OLD_JSON_PATH = os.path.join(DATA_DIR, "battery_log.json")
 JS_PATH = os.path.join(DATA_DIR, "battery_data.js")
+LIVE_PATH = os.path.join(DATA_DIR, "battery_live.js")
 LOCK_PATH = os.path.join(DATA_DIR, "logger.lock")
 SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
+ERROR_LOG = os.path.join(DATA_DIR, "logger.log")
 DASHBOARD = os.path.join(HERE, "battery_dashboard.html")
 
 HEARTBEAT = 300
 GAP = 12 * 60
+RETRY_AFTER_MISS = 5
 PORT = 47821
 
 LOW_ALERTS = [20, 10]
 VJUMP = 25
+
+log = logging.getLogger("hyperx")
 
 
 def find_path():
@@ -144,15 +160,22 @@ class Headset:
         return status
 
 
+def now_iso():
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def parse_time(s):
+    return datetime.fromisoformat(s).astimezone()
+
+
 def make_reading(status):
-    now = datetime.now().isoformat(timespec="seconds")
     if status is None:
-        return {"t": now, "state": "disconnected"}
-    return {"t": now, "state": "connected", **status}
+        return {"t": now_iso(), "state": "disconnected"}
+    return {"t": now_iso(), "state": "connected", **status}
 
 
 def seconds_between(a, b):
-    return (datetime.fromisoformat(b["t"]) - datetime.fromisoformat(a["t"])).total_seconds()
+    return (parse_time(b["t"]) - parse_time(a["t"])).total_seconds()
 
 
 def should_save(reading, last):
@@ -165,35 +188,84 @@ def should_save(reading, last):
     return seconds_between(last, reading) >= HEARTBEAT
 
 
-def load_readings():
-    try:
-        with open(JSON_PATH, encoding="utf-8") as f:
-            return json.load(f)["readings"]
-    except FileNotFoundError:
-        return []
-
-
 def write_atomic(path, text):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
-    for _ in range(20):
+    for attempt in range(20):
         try:
             os.replace(tmp, path)
             return
         except PermissionError:
+            if attempt == 19:
+                os.remove(tmp)
+                raise
             time.sleep(0.1)
 
 
-def save(readings, live):
-    doc = {
-        "device": "HyperX Cloud III S Wireless",
-        "live": live,
-        "readings": readings,
-    }
-    text = json.dumps(doc, separators=(",", ":"))
-    write_atomic(JSON_PATH, text)
-    write_atomic(JS_PATH, "window.BATTERY_DATA = " + text + ";\n")
+def js_line(reading):
+    return "BATTERY_READINGS.push(" + json.dumps(reading, separators=(",", ":")) + ");\n"
+
+
+def read_log(path):
+    readings, bad = [], 0
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                    r["t"], r["state"]
+                    readings.append(r)
+                except (ValueError, TypeError, KeyError):
+                    bad += 1
+    except FileNotFoundError:
+        pass
+    return readings, bad
+
+
+class Store:
+    def __init__(self):
+        self.count = 0
+        self.last = None
+
+    def load(self):
+        self._migrate_old_json()
+        readings, bad = read_log(LOG_PATH)
+        if bad:
+            backup = f"{LOG_PATH}.bad-{datetime.now():%Y%m%d-%H%M%S}"
+            os.replace(LOG_PATH, backup)
+            log.warning("skipped %d damaged lines in the log, original kept as %s", bad, backup)
+            write_atomic(LOG_PATH, "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in readings))
+        write_atomic(JS_PATH, "window.BATTERY_READINGS = [];\n" + "".join(js_line(r) for r in readings))
+        self.count = len(readings)
+        self.last = readings[-1] if readings else None
+
+    def _migrate_old_json(self):
+        if not os.path.exists(OLD_JSON_PATH) or os.path.exists(LOG_PATH):
+            return
+        try:
+            with open(OLD_JSON_PATH, encoding="utf-8") as f:
+                readings = json.load(f)["readings"]
+        except (ValueError, KeyError, TypeError):
+            log.warning("could not read the old battery_log.json, starting a new log")
+            readings = []
+        write_atomic(LOG_PATH, "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in readings))
+        os.replace(OLD_JSON_PATH, OLD_JSON_PATH + ".bak")
+        log.info("moved %d readings from battery_log.json to battery_log.jsonl", len(readings))
+
+    def append(self, reading):
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(reading, separators=(",", ":")) + "\n")
+        with open(JS_PATH, "a", encoding="utf-8") as f:
+            f.write(js_line(reading))
+        self.count += 1
+        self.last = reading
+
+    def save_live(self, live):
+        write_atomic(LIVE_PATH, "window.BATTERY_LIVE = " + json.dumps({**live, "count": self.count}) + ";\n")
 
 
 def direction(prev, cur, last_dir):
@@ -215,7 +287,7 @@ def load_settings():
     try:
         with open(SETTINGS_PATH, encoding="utf-8") as f:
             return {"alert80": False, **json.load(f)}
-    except (FileNotFoundError, ValueError):
+    except (FileNotFoundError, ValueError, TypeError):
         return {"alert80": False}
 
 
@@ -223,15 +295,29 @@ def save_settings(settings):
     write_atomic(SETTINGS_PATH, json.dumps(settings, indent=1))
 
 
-def alerts(prev, cur, alert80=False):
-    if prev is None or "pct" not in prev or cur["state"] != "connected":
+def alerts(prev, cur, fired, alert80=False):
+    if cur["state"] != "connected":
         return None
+    pct = cur["pct"]
     for level in LOW_ALERTS:
-        if prev["pct"] > level >= cur["pct"]:
-            return ("Headset battery low", f"Only {cur['pct']}% left. Time to charge your HyperX.")
-    if alert80 and prev["pct"] < 80 <= cur["pct"] < 100:
+        if pct >= level + 3:
+            fired.discard(level)
+    if pct < 75:
+        fired.discard(80)
+    if pct < 95:
+        fired.discard(100)
+    if prev is None or "pct" not in prev:
+        return None
+    charging = cur.get("chg") != 0
+    crossed = [lv for lv in LOW_ALERTS if prev["pct"] > lv >= pct and lv not in fired]
+    if crossed:
+        fired.update(crossed)
+        return ("Headset battery low", f"Only {pct}% left. Time to charge your HyperX.")
+    if alert80 and charging and prev["pct"] < 80 <= pct < 100 and 80 not in fired:
+        fired.add(80)
         return ("Headset at 80%", "Unplug now to make the battery last longer.")
-    if prev["pct"] < 100 == cur["pct"]:
+    if charging and prev["pct"] < 100 == pct and 100 not in fired:
+        fired.add(100)
         return ("Headset fully charged", "Your HyperX is at 100%. You can unplug the cable.")
     return None
 
@@ -244,6 +330,7 @@ class Tray:
         self.stop = stop
         self.settings = settings
         self.status = "Starting..."
+        self._fit = {}
         menu = pystray.Menu(
             pystray.MenuItem(lambda _: self.status, None, enabled=False),
             pystray.MenuItem("Check now", lambda: force.set()),
@@ -267,6 +354,17 @@ class Tray:
         except (OSError, ValueError):
             return self.ImageFont.truetype("arialbd.ttf", size)
 
+    def fitted_font(self, text, height):
+        key = (text, height)
+        if key not in self._fit:
+            for size in range(80, 8, -1):
+                f = self.font(text, size)
+                l, t, r, b = f.getbbox(text)
+                if r - l <= 62 and b - t <= height - 4:
+                    break
+            self._fit[key] = f
+        return self._fit[key]
+
     def draw(self, pct, dir_, mic=None):
         if pct is None:
             color, text = (110, 110, 110), "-"
@@ -282,11 +380,8 @@ class Tray:
             bottom = 46
             d.rectangle((0, 46, 63, 48), fill=(15, 15, 15))
             d.rectangle((0, 49, 63, 63), fill=(235, 40, 40) if mic == "muted" else (40, 220, 70))
-        for size in range(80, 8, -1):
-            f = self.font(text, size)
-            l, t, r, b = f.getbbox(text)
-            if r - l <= 62 and b - t <= bottom - 4:
-                break
+        f = self.fitted_font(text, bottom)
+        l, t, r, b = f.getbbox(text)
         d.text(((64 - (r - l)) / 2 - l, (bottom - (b - t)) / 2 - t), text, font=f, fill="white")
         return img
 
@@ -328,12 +423,13 @@ def start_check_server(force):
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            if self.path == "/check":
+            if self.headers.get("Origin") not in (None, "null"):
+                self.send_response(403)
+            elif self.path == "/check":
                 force.set()
                 self.send_response(204)
             else:
                 self.send_response(404)
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
 
         def log_message(self, *args):
@@ -342,6 +438,7 @@ def start_check_server(force):
     try:
         server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     except OSError:
+        log.warning("port %d is in use, the dashboard's Check now button is disabled", PORT)
         return None
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
@@ -350,10 +447,24 @@ def start_check_server(force):
 def acquire_lock():
     f = open(LOCK_PATH, "w")
     try:
-        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        if msvcrt:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         return None
     return f
+
+
+def setup_logging():
+    handler = logging.handlers.RotatingFileHandler(ERROR_LOG, maxBytes=256_000, backupCount=1,
+                                                   encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    log.addHandler(handler)
+    if sys.stderr:
+        log.addHandler(logging.StreamHandler())
+    log.setLevel(logging.INFO)
 
 
 def main():
@@ -372,12 +483,14 @@ def main():
         return 0 if reading["state"] == "connected" else 1
 
     os.makedirs(DATA_DIR, exist_ok=True)
+    setup_logging()
     lock = acquire_lock()
     if lock is None:
         print("Another logger is already running.")
         return 1
 
-    readings = load_readings()
+    store = Store()
+    store.load()
     settings = load_settings()
     stop = threading.Event()
     force = threading.Event()
@@ -385,52 +498,66 @@ def main():
     tray = None if args.no_tray else Tray(stop, force, settings)
 
     def worker():
-        prev = readings[-1] if readings else None
+        prev = store.last if store.last and store.last["state"] == "connected" else None
         last_chg = None
-        if prev and prev.get("state") == "connected" and "chg" in prev:
-            if seconds_between(prev, make_reading(None)) <= GAP:
-                last_chg = bool(prev["chg"])
+        if prev and "chg" in prev and seconds_between(prev, make_reading(None)) <= GAP:
+            last_chg = bool(prev["chg"])
         hs = Headset(charging=last_chg)
         dir_ = None
         off_since = None
+        missed = False
+        fired = set()
         next_check = 0
         while not stop.is_set():
-            if force.is_set() or time.time() >= next_check:
-                force.clear()
-                reading = make_reading(hs.status())
-                if reading["state"] == "connected":
-                    off_since = None
-                elif off_since is None:
-                    off_since = time.time()
-                elif time.time() - off_since > GAP:
-                    hs.charging = None
-                dir_ = direction(prev, reading, dir_)
-                if should_save(reading, readings[-1] if readings else None):
-                    readings.append(reading)
-                    print(f"{reading['t']}  {reading['state']:<12} "
-                          f"{reading.get('pct', '')!s:>3}%  {reading.get('mv', '')} mV  "
-                          f"{dir_ or ''} {reading.get('mic', '')}", flush=True)
-                next_check = time.time() + args.interval
-                next_t = datetime.fromtimestamp(next_check).isoformat(timespec="seconds")
-                live = {**reading, "interval": args.interval, "next": next_t}
-                if server:
-                    live["port"] = PORT
-                save(readings, live)
-                if tray:
-                    tray.update(reading, dir_)
-                    alert = alerts(prev, reading, settings["alert80"])
-                    if alert:
-                        tray.notify(*alert)
-                if reading["state"] == "connected":
-                    prev = reading
-            if hs.dev:
-                if hs.pump(0.3) & {EV_CHARGING, EV_MIC, EV_POWER}:
-                    next_check = time.time() + 1
-            else:
-                force.wait(0.3)
+            try:
+                if force.is_set() or time.time() >= next_check:
+                    force.clear()
+                    status = hs.status()
+                    was_connected = store.last is not None and store.last["state"] == "connected"
+                    if status is None and was_connected and not missed:
+                        missed = True
+                        next_check = time.time() + RETRY_AFTER_MISS
+                        continue
+                    missed = False
+                    reading = make_reading(status)
+                    if reading["state"] == "connected":
+                        off_since = None
+                    elif off_since is None:
+                        off_since = time.time()
+                    elif time.time() - off_since > GAP:
+                        hs.charging = None
+                    dir_ = direction(prev, reading, dir_)
+                    if should_save(reading, store.last):
+                        store.append(reading)
+                        print(f"{reading['t']}  {reading['state']:<12} "
+                              f"{reading.get('pct', '')!s:>3}%  {reading.get('mv', '')} mV  "
+                              f"{dir_ or ''} {reading.get('mic', '')}", flush=True)
+                    next_check = time.time() + args.interval
+                    live = {**reading, "interval": args.interval,
+                            "next": datetime.fromtimestamp(next_check).astimezone().isoformat(timespec="seconds")}
+                    if server:
+                        live["port"] = PORT
+                    store.save_live(live)
+                    if tray:
+                        tray.update(reading, dir_)
+                        alert = alerts(prev, reading, fired, settings["alert80"])
+                        if alert:
+                            tray.notify(*alert)
+                    if reading["state"] == "connected":
+                        prev = reading
+                if hs.dev:
+                    if hs.pump(0.3) & {EV_CHARGING, EV_MIC, EV_POWER}:
+                        next_check = time.time() + 1
+                else:
+                    force.wait(0.3)
+            except Exception:
+                log.exception("check failed, retrying in 10 s")
+                hs.close()
+                next_check = time.time() + 10
+                stop.wait(1)
         hs.close()
 
-    print(f"Logging to {JSON_PATH} every {args.interval}s. Ctrl+C to stop.")
+    log.info("logging to %s every %ds", LOG_PATH, args.interval)
     if tray:
         tray.run(worker)
     else:
