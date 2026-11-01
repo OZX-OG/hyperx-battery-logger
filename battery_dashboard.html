@@ -200,6 +200,16 @@ const confidence = (pct) =>
   : pct >= SURE * 0.3 ? { level: 1, label: 'Getting better', color: 'var(--warning)' }
   : { level: 0, label: 'Early estimate', color: 'var(--critical)' };
 const AFTER_CHECK = 5e3;
+let pcOffset = null;
+const tzOf = (t) => {
+  const m = /([+-])(\d\d):(\d\d)$/.exec(t || '');
+  return m ? (m[1] === '-' ? -1 : 1) * (+m[2] * 60 + +m[3]) * MIN : null;
+};
+const shift = () => pcOffset ?? -new Date().getTimezoneOffset() * MIN;
+const parseT = (t) => tzOf(t) !== null || /Z$/i.test(t) ? +new Date(t) : +new Date(t + 'Z') - shift();
+const pc = (ms) => new Date(ms + shift());
+const unpc = (d) => +d - shift();
+const fmt = (ms, opts) => pc(ms).toLocaleString(undefined, { ...opts, timeZone: 'UTC' });
 const RETRY = 30e3;
 
 let rangeDays = 7;
@@ -262,13 +272,13 @@ let loadTimer = null;
 function schedule(ms) { clearTimeout(loadTimer); loadTimer = setTimeout(load, ms); }
 
 const intervalMs = () => (model.data.live.interval || 60) * 1000;
-const nextCheck = () => model.data.live.next ? +new Date(model.data.live.next) : +new Date(model.data.live.t) + intervalMs();
-const isStale = () => Date.now() - +new Date(model.data.live.t) > Math.max(3 * intervalMs(), 5 * MIN);
+const nextCheck = () => model.data.live.next ? parseT(model.data.live.next) : parseT(model.data.live.t) + intervalMs();
+const isStale = () => Date.now() - parseT(model.data.live.t) > Math.max(3 * intervalMs(), 5 * MIN);
 
 function updateStatus() {
   if (!model) return;
   const stale = isStale();
-  const liveMs = +new Date(model.data.live.t);
+  const liveMs = parseT(model.data.live.t);
   const left = nextCheck() - Date.now();
   const sec = Math.max(0, Math.ceil(left / 1000));
   document.getElementById('liveDot').classList.toggle('stale', stale);
@@ -283,11 +293,12 @@ function updateStatus() {
 }
 
 function build(data) {
+  pcOffset = tzOf(data.live.t) ?? tzOf((data.readings[data.readings.length - 1] || {}).t);
   const segs = [];
   let cur = [];
   for (const r of data.readings) {
     if (r.state !== 'connected') { if (cur.length) segs.push(cur); cur = []; continue; }
-    const p = { t: +new Date(r.t), pct: r.pct, mv: r.mv, chg: r.chg };
+    const p = { t: parseT(r.t), pct: r.pct, mv: r.mv, chg: r.chg };
     if (cur.length && p.t - cur[cur.length - 1].t > GAP) { segs.push(cur); cur = []; }
     cur.push(p);
   }
@@ -345,7 +356,7 @@ function build(data) {
   const usage = [];
   let on = null, lastT = null;
   for (const r of data.readings) {
-    const t = +new Date(r.t);
+    const t = parseT(r.t);
     if (r.state === 'connected') {
       if (on !== null && t - lastT > GAP) { usage.push([on, lastT]); on = null; }
       if (on === null) on = t;
@@ -353,15 +364,15 @@ function build(data) {
     } else if (on !== null) { usage.push([on, t]); on = null; }
   }
   if (on !== null) {
-    const liveT = +new Date(data.live.t);
+    const liveT = parseT(data.live.t);
     usage.push([on, data.live.state === 'connected' && liveT - lastT <= GAP ? liveT : lastT]);
   }
 
   const byDay = new Map();
   for (let [a, b] of usage) {
     while (a < b) {
-      const d = new Date(a); d.setHours(24, 0, 0, 0);
-      const end = Math.min(+d, b);
+      const d = pc(a); d.setUTCHours(24, 0, 0, 0);
+      const end = Math.min(unpc(d), b);
       const key = dayKey(a);
       byDay.set(key, (byDay.get(key) || 0) + (end - a));
       a = end;
@@ -391,8 +402,8 @@ function build(data) {
 }
 
 function dayKey(ms) {
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const d = pc(ms);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 }
 const monthKey = (ms) => dayKey(ms).slice(0, 7);
 
@@ -403,7 +414,7 @@ const fmtDur = (ms) => {
   if (h < 48) return `${h}h ${String(m % 60).padStart(2, '0')}m`;
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 };
-const fmtDate = (ms) => new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const fmtDate = (ms) => fmt(ms, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const fmtAgo = (ms) => { const s = (Date.now() - ms) / 1000; return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : `${fmtDur(s * 1000)} ago`; };
 const label = (dir) => dir === 'charging' ? 'Charging' : 'Discharging';
 const color = (dir) => `var(--${dir})`;
@@ -551,18 +562,18 @@ function ticks(tMin, tMax, width) {
   const steps = [H, 3 * H, 6 * H, 12 * H, 24 * H, 2 * 24 * H, 7 * 24 * H, 14 * 24 * H, 30 * 24 * H];
   const maxTicks = Math.max(2, Math.floor(width / 80));
   const step = steps.find(s => (tMax - tMin) / s <= maxTicks) || steps[steps.length - 1];
-  const d = new Date(tMin);
-  d.setMinutes(0, 0, 0);
-  if (step >= 24 * H) d.setHours(0);
+  const d = pc(tMin);
+  d.setUTCMinutes(0, 0, 0);
+  if (step >= 24 * H) d.setUTCHours(0);
   const out = [];
-  for (let t = +d; t <= tMax; t = step >= 24 * H ? +new Date(new Date(t).setDate(new Date(t).getDate() + step / (24 * H))) : t + H) {
+  for (let w = +d; unpc(w) <= tMax; w += step >= 24 * H ? step : H) {
+    const t = unpc(w);
     if (t < tMin) continue;
-    const dt = new Date(t);
-    if (step < 24 * H && dt.getHours() % (step / H) !== 0) continue;
-    const midnight = dt.getHours() === 0;
-    out.push({ t, label: step < 24 * H && !midnight
-      ? dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-      : dt.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) });
+    const hour = new Date(w).getUTCHours();
+    if (step < 24 * H && hour % (step / H) !== 0) continue;
+    out.push({ t, label: step < 24 * H && hour !== 0
+      ? fmt(t, { hour: '2-digit', minute: '2-digit' })
+      : fmt(t, { day: 'numeric', month: 'short' }) });
   }
   return out;
 }
@@ -577,8 +588,9 @@ function renderUsage() {
 
   const days = [];
   for (let i = 13; i >= 0; i--) {
-    const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - i);
-    days.push({ d, key: dayKey(+d), ms: model.byDay.get(dayKey(+d)) || 0 });
+    const d = pc(Date.now()); d.setUTCHours(12, 0, 0, 0); d.setUTCDate(d.getUTCDate() - i);
+    const t = unpc(d);
+    days.push({ t, key: dayKey(t), ms: model.byDay.get(dayKey(t)) || 0 });
   }
   const maxH = Math.max(4, Math.ceil(Math.max(...days.map(d => d.ms / H)) / 4) * 4);
   const y = (h) => m.t + (1 - h / maxH) * ih;
@@ -596,7 +608,7 @@ function renderUsage() {
       out += `<path d="M${cx - bw / 2},${m.t + ih} V${top + r} q0,-${r} ${r},-${r} H${cx + bw / 2 - r} q${r},0 ${r},${r} V${m.t + ih} Z" fill="var(--usage)"/>`;
     }
     if (days.length <= 14 && (slot >= 34 || i % 2 === 1)) {
-      out += `<text x="${cx}" y="${Hh - 8}" text-anchor="middle">${d.d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</text>`;
+      out += `<text x="${cx}" y="${Hh - 8}" text-anchor="middle">${fmt(d.t, { day: 'numeric', month: 'short' })}</text>`;
     }
     out += `<rect class="hit" data-i="${i}" x="${cx - slot / 2}" y="${m.t}" width="${slot}" height="${ih}" fill="transparent"/>`;
   });
@@ -607,7 +619,7 @@ function renderUsage() {
     const hit = e.target.closest('.hit');
     if (!hit) { tip.style.display = 'none'; return; }
     const d = days[+hit.dataset.i];
-    tip.innerHTML = `<b>${d.ms ? fmtDur(d.ms) : 'not used'}</b><br><span class="muted">${d.d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })}</span>`;
+    tip.innerHTML = `<b>${d.ms ? fmtDur(d.ms) : 'not used'}</b><br><span class="muted">${fmt(d.t, { weekday: 'long', day: 'numeric', month: 'short' })}</span>`;
     tip.style.display = 'block';
     const rect = svg.getBoundingClientRect();
     const cx = (m.l + slot * (+hit.dataset.i + 0.5)) / W * rect.width;
@@ -631,12 +643,12 @@ function renderHealth() {
     const change = (first.drain / latest.drain - 1) * 100;
     trend = [`${change >= 0 ? '+' : ''}${change.toFixed(0)}%`, `runtime ${fmtMonth(first.key)} → ${fmtMonth(latest.key)}`];
   }
-  const since = data.readings.length ? new Date(data.readings[0].t) : null;
+  const since = data.readings.length ? parseT(data.readings[0].t) : null;
   const tiles = [
     ['Charge cycles', (charged / 100).toFixed(1), `${charged}% charged in total`],
     ['Runtime now', latest ? fmtDur(100 / -latest.drain * H) : '-', latest ? `full charge, ${fmtMonth(latest.key)}` : 'needs 1h+ unplugged'],
     ['Runtime change', ...trend],
-    ['Tracking since', since ? since.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '-',
+    ['Tracking since', since ? fmt(since, { day: 'numeric', month: 'short', year: 'numeric' }) : '-',
       since ? `${Math.max(1, Math.round((Date.now() - since) / (24 * H)))} days` : ''],
   ];
   document.getElementById('healthTiles').innerHTML = tiles.map(([k, v, sub]) =>
@@ -651,7 +663,7 @@ function renderHealth() {
         <td class="num">${mo.drain ? fmtDur(100 / -mo.drain * H) : '-'}</td></tr>`).join('')
     : '';
 }
-const fmtMonth = (k) => new Date(k + '-15').toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+const fmtMonth = (k) => new Date(k + '-15').toLocaleDateString(undefined, { month: 'short', year: 'numeric', timeZone: 'UTC' });
 
 function renderSessions() {
   const list = [...model.sessions].reverse().slice(0, 60);
