@@ -16,13 +16,15 @@ HyperX NGENUITY shows the battery level but keeps no history. This tool reads th
 - **Mic mute status**: shown in the tray icon and on the dashboard.
 - **Tray icon**: the battery % next to the clock, colored by battery level, with a red or green strip for the mic.
 - **Notifications**: at 20% and 10% ("time to charge"), and at 100% ("you can unplug"). Optionally also at 80% while charging, which is easier on the battery.
+- **Mic warning**: a notification when the mic turns back on by itself, for example after the headset reconnects, without you pressing the button.
 - **Check now**: from the tray menu or the dashboard, to get a fresh reading without waiting for the next check.
 - **Live dashboard**: a local HTML page that refreshes itself after every check, with a countdown to the next one.
-  - Battery level chart (24h / 7 days / 30 days / all) with hover details
-  - Average drain, full-charge runtime, charging speed, time left / time to full
+  - Battery level chart (24h / 7 days / 30 days / all) with hover details. Drag across it to select any time span and see that span's headset-on time, battery used, drain rate (and the full-charge runtime it implies), charging speed and voltage; **Zoom to selection** zooms the chart in, **Clear** or Esc resets. Click a row in the Sessions table or a bar in the on-time chart to select that span on the chart
+  - Recharge forecast: how many hours of use are left and the day you'll need to charge, based on how much you use the headset
+  - Average drain, full-charge runtime, charging speed and time to full, each marked *Early estimate*, *Getting better* or *Reliable* depending on how much data it's based on
   - Hours the headset was on, per day
-  - Battery health: charge cycles and how the runtime changes month by month
-  - A list of every charge and discharge session
+  - Battery health: charge cycles, how the runtime changes month by month, and the voltage after each full charge
+  - Every charge and discharge, with how many times the headset was on during each
 - **Starts with Windows**: runs hidden at login and can be turned off in Task Manager.
 - Runs alongside HyperX NGENUITY without conflicts.
 
@@ -87,6 +89,7 @@ Adding another headset means finding its USB ID and its battery command (see [Ho
   - **Check now**: reads the headset right away
   - **Open dashboard** (also on double-click) and **Open data folder**
   - **Notify at 80% while charging**: turns the 80% alert on or off (off by default; the choice is remembered)
+  - **Warn when the mic turns on by itself**: turns the mic warning on or off (on by default)
   - **Quit logger**: stops the logger until the next login
 
 > If you don't see the icon, Windows may have hidden it under the **^** arrow next to the clock. Drag it onto the taskbar to keep it visible.
@@ -95,20 +98,31 @@ Adding another headset means finding its USB ID and its battery command (see [Ho
 
 The top of the page shows the current battery level and the averages calculated from your history. The dot at the top right is green while the logger is running and red if it stopped. The countdown shows when the next check happens. The page loads the new data a few seconds after each check, so you can leave it open. The **Check now** button next to the countdown asks the logger for a fresh reading right away; the page updates within a couple of seconds.
 
+- **Recharge forecast** (under the battery level, while on battery): for example *43% ≈ 44h 45m of use left · lasts until about Tue, Nov 10*. The hours come from your average drain; the date spreads them over your average daily use in the last 7 full days (today not counted), so it stays right even though you don't wear the headset all day. The battery chart also draws this as a dashed purple **forecast line** down to 0%, marking when it crosses the dotted **20% low** line and when it reaches empty. The chart stretches to the right so the empty point stays in view.
+- **Estimate labels**: drain, runtime, charging speed and charge time start as *Early estimate*. They become *Getting better* after 30% of battery has been recorded and *Reliable* after 100%, counted separately for discharging and charging. Until then a note shows how much data they're based on.
+
+![Selecting a time span on the battery chart](docs/dashboard_selection.png)
+
+- **Select a time span**: drag across the battery chart to see that span's headset-on time, battery used, drain rate (with the full-charge runtime it implies, compared to your average), charging speed and voltage. **Zoom to selection** zooms the chart in so you can select more precisely; **Clear** or Esc resets. Clicking a row in the Sessions table or a bar in the on-time chart selects that span too. *Gained while off* is battery that came back while the headset was off: charging with it off, or the small recovery a battery makes after resting.
+
 ![On-time per day and battery health](docs/dashboard_usage_health.png)
 
-- **Headset on-time per day**: hours the headset was switched on, for the last 14 days. Hover over a bar for the exact time.
-- **Battery health**: one *charge cycle* = 100% charged in total (for example 2 × 50%). *Runtime change* compares the estimated full-charge runtime of your first month with the latest one. A slowly falling runtime is normal battery wear. This section needs a few weeks of data before it means much.
+- **Headset on-time per day**: hours the headset was switched on, for the last 14 days. Hover over a bar for the exact time, click it to see that day on the battery chart.
+- **Battery health**: one *charge cycle* = 100% charged in total (for example 2 × 50%). *Runtime change* compares the estimated full-charge runtime of your first month with the latest one. A slowly falling runtime is normal battery wear. This section needs a few weeks of data before it means much. *Voltage after each full charge* records the voltage once it has settled, 10+ minutes after reaching 100% and unplugging. A slow drop over months is the earliest sign of battery wear.
 
 ![Sessions](docs/dashboard_sessions.png)
 
-- **Sessions**: every charge and discharge period longer than 10 minutes, with its duration and rate (% per hour). Time spent sitting at 100% on the cable doesn't count toward the charging speed.
+- **Sessions**: one row per charge and per discharge, from one charge to the next, even across days and PC restarts. *Headset on* counts only the time the headset was actually on, and the rate (% per hour) uses that time. If you charge with the headset off, the logger can't see it happen, so it shows up as a *Charged (headset off)* row with no rate. Time spent sitting at 100% on the cable doesn't count toward the charging speed.
 
 ### Notifications
 
 Windows notifications appear when the battery drops to **20%** and to **10%**, and when it reaches **100%** while charging.
 
-Lithium batteries wear more slowly when they aren't kept at 100%. To get a reminder to unplug at **80%** instead, turn on **Notify at 80% while charging** in the tray menu. If they don't show up, check *Settings → System → Notifications* and make sure notifications are allowed for Python.
+Lithium batteries wear more slowly when they aren't kept at 100%. To get a reminder to unplug at **80%** instead, turn on **Notify at 80% while charging** in the tray menu.
+
+The headset doesn't remember mute when it turns off: after auto-shutdown, going out of range or a power cycle it comes back with the **mic on**. The logger warns you when that happens (*Mic turned on by itself*). It can tell this apart from you pressing the mic button, which doesn't trigger a warning.
+
+If notifications don't show up, check *Settings → System → Notifications* and make sure notifications are allowed for Python.
 
 ## Turning it off
 
@@ -127,12 +141,14 @@ hyperx_battery_logger.py   the logger (tray icon, notifications, saving)
 battery_dashboard.html     the dashboard, open it in any browser
 install_autostart.ps1      start with Windows / -Uninstall
 requirements.txt           Python packages
-tests/                     unit tests (python -m unittest discover -s tests)
+tests/                     logger tests (python -m unittest discover -s tests)
+                           dashboard tests (node --test tests/test_dashboard.js)
+LICENSE                    MIT
 data/
   battery_log.jsonl        all readings, one JSON object per line (your history, keep this file)
   battery_data.js          the same readings for the dashboard
   battery_live.js          the latest check (rewritten every check, a few hundred bytes)
-  settings.json            tray menu settings (the 80% alert)
+  settings.json            tray menu settings (the 80% alert and the mic warning)
   logger.log               errors and warnings
   logger.lock              stops a second logger from running at the same time
 docs/                      README images
@@ -219,9 +235,20 @@ Some ideas to start with:
 
 If you have a different HyperX headset, even just opening an issue with its USB ID (`VID_03F0&PID_xxxx` from Device Manager) helps.
 
+Before sending a pull request, run both test suites (the dashboard tests need [Node.js](https://nodejs.org) 18 or newer):
+
+```powershell
+python -m unittest discover -s tests
+node --test tests/test_dashboard.js
+```
+
 ## Credits
 
 - [gear-tray](https://github.com/dddd-zdf/gear-tray): the battery command and event format for the Cloud III S dongle.
 - [HyperX-Cloud-2-Battery-Monitor](https://github.com/auto94/HyperX-Cloud-2-Battery-Monitor): reference for HyperX headset battery reading.
 
 Not affiliated with HyperX or HP.
+
+## License
+
+[MIT](LICENSE): free to use, change and share, including in your own projects.

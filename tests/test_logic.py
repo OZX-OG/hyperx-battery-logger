@@ -88,6 +88,20 @@ class Alerts(unittest.TestCase):
         self.assertNotIn("Headset fully charged", self.run_levels([99, 100], chg=0))
 
 
+class MicTurnedOn(unittest.TestCase):
+    def test_warns_when_mic_comes_back_live_without_a_press(self):
+        self.assertTrue(L.mic_turned_on("muted", r("2026-10-31T10:00:00+02:00", 50, mic="live"), False))
+
+    def test_quiet_when_the_button_was_pressed(self):
+        self.assertFalse(L.mic_turned_on("muted", r("2026-10-31T10:00:00+02:00", 50, mic="live"), True))
+
+    def test_quiet_when_nothing_changed_or_unknown(self):
+        self.assertFalse(L.mic_turned_on("live", r("2026-10-31T10:00:00+02:00", 50, mic="live"), False))
+        self.assertFalse(L.mic_turned_on(None, r("2026-10-31T10:00:00+02:00", 50, mic="live"), False))
+        self.assertFalse(L.mic_turned_on("muted", r("2026-10-31T10:00:00+02:00", 50, mic="muted"), False))
+        self.assertFalse(L.mic_turned_on("muted", r("2026-10-31T10:00:00+02:00", state="disconnected"), False))
+
+
 class Storage(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -142,6 +156,22 @@ class Storage(unittest.TestCase):
         s = L.Store()
         s.load()
         self.assertEqual(s.count, 0)
+
+    def test_last_mic_survives_a_disconnect(self):
+        s = L.Store()
+        s.load()
+        s.append(r("2026-10-31T10:00:00+02:00", 50, mic="muted"))
+        s.append(r("2026-10-31T10:05:00+02:00", state="disconnected"))
+        s2 = L.Store()
+        s2.load()
+        self.assertEqual(s2.last_mic, "muted")
+
+    def test_settings_default_and_keep_saved_values(self):
+        path = os.path.join(self.dir.name, "settings.json")
+        with mock.patch.object(L, "SETTINGS_PATH", path):
+            self.assertEqual(L.load_settings(), {"alert80": False, "mic_warn": True})
+            L.save_settings({"alert80": True})
+            self.assertEqual(L.load_settings(), {"alert80": True, "mic_warn": True})
 
     def test_live_file_carries_count(self):
         s = L.Store()

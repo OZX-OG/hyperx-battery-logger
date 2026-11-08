@@ -79,6 +79,7 @@ class Headset:
         self.dev = None
         self.charging = charging
         self.muted = None
+        self.mic_pressed = False
 
     def open(self):
         if self.dev:
@@ -108,6 +109,7 @@ class Headset:
             self.charging = bool(value)
         elif event == EV_MIC:
             self.muted = bool(value)
+            self.mic_pressed = True
         return event
 
     def pump(self, seconds):
@@ -230,6 +232,7 @@ class Store:
     def __init__(self):
         self.count = 0
         self.last = None
+        self.last_mic = None
 
     def load(self):
         self._migrate_old_json()
@@ -242,6 +245,7 @@ class Store:
         write_atomic(JS_PATH, "window.BATTERY_READINGS = [];\n" + "".join(js_line(r) for r in readings))
         self.count = len(readings)
         self.last = readings[-1] if readings else None
+        self.last_mic = next((r["mic"] for r in reversed(readings) if r.get("mic")), None)
 
     def _migrate_old_json(self):
         if not os.path.exists(OLD_JSON_PATH) or os.path.exists(LOG_PATH):
@@ -263,6 +267,8 @@ class Store:
             f.write(js_line(reading))
         self.count += 1
         self.last = reading
+        if reading.get("mic"):
+            self.last_mic = reading["mic"]
 
     def save_live(self, live):
         write_atomic(LIVE_PATH, "window.BATTERY_LIVE = " + json.dumps({**live, "count": self.count}) + ";\n")
@@ -283,12 +289,15 @@ def direction(prev, cur, last_dir):
     return last_dir
 
 
+DEFAULT_SETTINGS = {"alert80": False, "mic_warn": True}
+
+
 def load_settings():
     try:
         with open(SETTINGS_PATH, encoding="utf-8") as f:
-            return {"alert80": False, **json.load(f)}
+            return {**DEFAULT_SETTINGS, **json.load(f)}
     except (FileNotFoundError, ValueError, TypeError):
-        return {"alert80": False}
+        return dict(DEFAULT_SETTINGS)
 
 
 def save_settings(settings):
@@ -322,6 +331,10 @@ def alerts(prev, cur, fired, alert80=False):
     return None
 
 
+def mic_turned_on(last_mic, cur, pressed):
+    return cur["state"] == "connected" and last_mic == "muted" and cur.get("mic") == "live" and not pressed
+
+
 class Tray:
     def __init__(self, stop, force, settings):
         import pystray
@@ -339,6 +352,8 @@ class Tray:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Notify at 80% while charging", self.toggle_alert80,
                              checked=lambda _: self.settings["alert80"]),
+            pystray.MenuItem("Warn when the mic turns on by itself", self.toggle_mic_warn,
+                             checked=lambda _: self.settings["mic_warn"]),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit logger", self.quit),
         )
@@ -405,6 +420,10 @@ class Tray:
 
     def toggle_alert80(self):
         self.settings["alert80"] = not self.settings["alert80"]
+        save_settings(self.settings)
+
+    def toggle_mic_warn(self):
+        self.settings["mic_warn"] = not self.settings["mic_warn"]
         save_settings(self.settings)
 
     def quit(self):
@@ -507,6 +526,7 @@ def main():
         off_since = None
         missed = False
         fired = set()
+        last_mic = store.last_mic
         next_check = 0
         while not stop.is_set():
             try:
@@ -543,6 +563,14 @@ def main():
                         alert = alerts(prev, reading, fired, settings["alert80"])
                         if alert:
                             tray.notify(*alert)
+                    pressed, hs.mic_pressed = hs.mic_pressed, False
+                    if mic_turned_on(last_mic, reading, pressed):
+                        log.info("mic turned on without a button press")
+                        if tray and settings["mic_warn"]:
+                            tray.notify("Mic turned on by itself",
+                                        "Your headset came back with the mic on. Press the mic button to mute it.")
+                    if reading.get("mic"):
+                        last_mic = reading["mic"]
                     if reading["state"] == "connected":
                         prev = reading
                 if hs.dev:
